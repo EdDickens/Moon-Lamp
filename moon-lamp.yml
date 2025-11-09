@@ -1,0 +1,271 @@
+substitutions:
+  name: "moon-lamp"
+  friendly_name: Moon Lamp
+#---------------------------------------------------------------------------------------------------
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2024.6.0
+  name_add_mac_suffix: false
+  project:
+    name: esphome.web
+    version: recommended
+  on_boot: 
+    priority: -10
+    then:
+#      - ds1307.read_time:
+      - script.execute: rainbow_on
+#---------------------------------------------------------------------------------------------------
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+#---------------------------------------------------------------------------------------------------
+sun:
+  latitude: 39.3722  # Castle Rock, CO Latitude
+  longitude: -104.8561 # Castle Rock, CO Longitude
+  on_sunrise: 
+    - elevation: -5°
+      then:
+        - script.execute: rainbow_on
+        - logger.log: "Good Morning"
+  on_sunset: 
+    - elevation: +5°
+      then:
+        - light.turn_off: LED_Array
+        - logger.log: "Good Night"
+#---------------------------------------------------------------------------------------------------
+time:
+  - platform: ds1307
+    timezone: America/Denver
+    id: rtc_time
+    update_interval: never
+    on_time: 
+      - seconds: 0
+        then:
+          - text_sensor.template.publish:
+              id: current_time
+              state: !lambda 'return id(rtc_time).now().strftime("%I:%M  %Y-%m-%d");'
+  - platform: homeassistant
+    id: ha_time
+    update_interval: 1d
+    on_time_sync: 
+      then:
+        - ds1307.write_time: 
+        - text_sensor.template.publish:
+            id: current_time
+            state: !lambda 'return id(rtc_time).now().strftime("%I:%M  %Y-%m-%d");'
+#---------------------------------------------------------------------------------------------------
+# Enable logging
+logger:
+  baud_rate: 0
+  logs:
+    component: ERROR
+#---------------------------------------------------------------------------------------------------
+# Enable Home Assistant API
+api:
+  reboot_timeout: 0s
+  encryption: 
+    key: !secret haapi_key
+#---------------------------------------------------------------------------------------------------
+# Allow Over-The-Air updates
+ota:
+  - platform: esphome
+    password: !secret ota_password
+#---------------------------------------------------------------------------------------------------
+# Creates a simple web server on the node that can be accessed through any browser
+web_server:
+  version: 3
+  port: 80
+  ota: false
+  local: True
+  auth:
+    username: admin
+    password: !secret web_password
+#---------------------------------------------------------------------------------------------------
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  fast_connect: on
+  reboot_timeout: 0s
+  ap:
+    ssid: moon-lamp
+    password: !secret wifi_password
+    ap_timeout: 30s
+    manual_ip:
+      static_ip: 4.3.2.1
+      gateway: 4.3.2.1
+      subnet: 255.255.255.0
+#---------------------------------------------------------------------------------------------------
+dashboard_import:
+  package_import_url: github://esphome/example-configs/esphome-web/esp8266.yaml@main
+  import_full_config: true
+#---------------------------------------------------------------------------------------------------
+globals:
+  # Stores the 'Red"' random value
+  - id: r
+    type: float
+    restore_value: no
+    initial_value: '1.0'
+  
+  # Stores the 'Green' random value
+  - id: g
+    type: float
+    restore_value: no
+    initial_value: '1.0'
+    
+  # Stores the 'Blue' random value
+  - id: b
+    type: float
+    restore_value: no
+    initial_value: '1.0'
+#---------------------------------------------------------------------------------------------------
+text_sensor:
+  - platform: wifi_info
+    ip_address: 
+      name: ${friendly_name} IP
+    mac_address:
+      name: ${friendly_name} Mac
+  - platform: template
+    name: "Current Device Time"
+    id: current_time
+    internal: true
+    update_interval: never
+    lambda: 'return {"Initializing"};'   
+#---------------------------------------------------------------------------------------------------
+remote_receiver:
+  filter: 50us
+  pin: 
+    number: GPIO1 #Tx0
+    inverted: true
+  dump:
+  - pioneer: {}
+#---------------------------------------------------------------------------------------------------
+binary_sensor:
+  - platform: remote_receiver
+    name: "Flicker"
+    id: flicker_mode
+#   Remote 'Mode'
+    internal: True
+    filters:
+      - delayed_off: 100ms
+    pioneer:
+      rc_code_1: 0x0046
+    on_release:
+      then:
+        - script.execute: flicker_on
+        - logger.log: "Flicker Effect On"
+#---------------------------------------------------
+  - platform: remote_receiver
+    name: "Rainbow"
+    id: rainbow_mode
+#   Remote 'Mute'
+    internal: True
+    filters:
+      - delayed_off: 100ms
+    pioneer:
+      rc_code_1: 0x0047
+    on_release:
+      then:
+        - script.execute: rainbow_on
+        - logger.log: "Rainbow Effect On"
+#---------------------------------------------------
+  - platform: remote_receiver
+    name: "Random Color"
+    id: randomcolor
+#   Remote 'Play/Pause'
+    internal: True
+    filters:
+      - delayed_off: 100ms
+    pioneer:
+      rc_code_1: 0x0044
+    on_press:
+      then:
+        - script.execute: random_color
+    on_release: 
+      then:
+        - light.turn_on:
+            id: LED_Array
+            brightness: 80%
+            effect: "None"
+            red: !lambda 'return id(r);'
+            green: !lambda 'return id(g);'
+            blue: !lambda 'return id(b);'
+        - logger.log: "Random Color Set"
+#---------------------------------------------------------------------------------------------------
+i2c:
+  id: i2cbus_a
+  sda: GPIO21 #D22 Yellow
+  scl: GPIO22 #D21 Green
+#---------------------------------------------------------------------------------------------------
+switch:
+  - platform: restart
+    name: "${friendly_name} Restart"
+#---------------------------------------------------------------------------------------------------
+light:
+  - platform: esp32_rmt_led_strip
+    id: LED_Array
+    chipset: ws2812
+    pin: GPIO13
+    rgb_order: GRB
+    num_leds: 7
+    name: "${friendly_name} LED Array"
+    effects: 
+      - random:
+          name: Random
+          transition_length: 3s
+          update_interval: 5s
+      - addressable_fireworks:
+          use_random_color: True
+          name: Fireworks
+      - addressable_flicker: 
+          name: Flicker
+          update_interval: 16ms
+          intensity: 25%
+      - addressable_rainbow:
+          name: Rainbow
+      - addressable_color_wipe:
+      - addressable_scan:
+          name: Scan
+          move_interval: 500ms
+          scan_width: 1
+    on_turn_on: 
+      then:
+        - script.execute: rainbow_on
+#---------------------------------------------------------------------------------------------------
+script:
+  - id: rainbow_on
+    then:
+    - light.turn_on:
+        id: LED_Array
+        brightness: 80% # Set the brightness and colors/temperature as desired for the effect
+        effect: "Rainbow" # Use the exact name of the defined effect
+  - id: flicker_on
+    then:
+    - light.turn_on:
+        id: LED_Array
+        brightness: 80% # Set the brightness and colors/temperature as desired for the effect
+        effect: "Flicker" # Use the exact name of the defined effect
+  - id: random_color
+    then:
+#      - lambda: |-
+#          id(LED_Array)->turn_on().set_brightness(0.70).set_rgb(1.0, 0.25, 1.0).set_effect("None").perform();
+      - lambda: |-
+          // Define the maximum value for a 32-bit unsigned random number
+          const float RAND_MAX_VAL = 0xFFFFFFFFUL; 
+     
+          // Calculate each random float (0 to 1) and store it in the global variable
+          // Formula: (float)random_integer / maximum_integer_value
+     
+          id(r) = (float)random() / RAND_MAX_VAL;
+          id(g) = (float)random() / RAND_MAX_VAL;
+          id(b) = (float)random() / RAND_MAX_VAL;
+#---------------------------------------------------------------------------------------------------
+# 21 Button Remote Codes
+#  45  46  47
+#  44  40  43
+#  07  15  09
+#  16  19  0D
+#  0C  18  5E
+#  08  1C  5A
+#  42  52  4A
