@@ -19,6 +19,7 @@ esphome:
           id: backlight
           brightness: 75%
       - script.execute: rainbow_on
+      - script.execute: init_brightness
 #---------------------------------------------------------------------------------------------------
 esp32:
   variant: esp32c6
@@ -54,6 +55,17 @@ time:
     - lvgl.label.update:
         id: display_date
         text: !lambda return id(HADate).state;
+    on_time:
+      - hours: 10,12,14,16,6
+        minutes: 0
+        seconds: 0
+        then:
+          - switch.turn_on: switch_antiburn
+      - hours: 10,12,14,16,6
+        minutes: 15
+        seconds: 0
+        then:
+          - switch.turn_off: switch_antiburn
 #---------------------------------------------------------------------------------------------------
 spi:
   - id: lcd
@@ -97,10 +109,71 @@ sensor:
   - platform: rotary_encoder
     name: "Rotary Encoder"
     id: encoder_steps
-    pin_a: GPIO1 # Replace with your CLK/A pin
-    pin_b: GPIO2 # Replace with your DT/B pin
+    pin_a: GPIO2 # Replace with your CLK/A pin
+    pin_b: GPIO1 # Replace with your DT/B pin
     resolution: 1 # Number of steps per click
     # If the values go in the wrong direction, swap pin_a and pin_b
+
+  - platform: template
+    name: "Moon Brightness"
+    id: moon_brightness_sensor
+    update_interval: never
+    internal: True
+    lambda: |-
+      // Access the light's internal state object and get the brightness.
+      // Returns a float between 0.0 and 1.0.
+      float m_brightness = id(LED_Array).current_values.get_brightness();
+
+      // Optionally, convert to a percentage (0-100) and return it.
+      return m_brightness * 100.0;
+    on_value:
+      then:
+        - lvgl.slider.update:
+            id: moon_brightness_slider
+            value: !lambda 'return x;' # x is the value from the lambda
+
+
+#  - platform: homeassistant
+#    id: moon_brightness_sensor
+#    entity_id: light.moon_display_moon_display_led_array
+#    attribute: brightness
+#    internal: true
+#    on_value:
+#      then:
+#        - lvgl.slider.update:
+#            id: moon_brightness_slider
+#            value: !lambda 'return x / 2.55;' # x (0-255) is the value from the sensor. Needs to be scaled to 0-100.
+
+  - platform: template
+    name: "Display Brightness"
+    id: display_brightness_sensor
+    update_interval: never
+    internal: True
+    lambda: |-
+      // Access the light's internal state object and get the brightness.
+      // Returns a float between 0.0 and 1.0.
+      float d_brightness = id(backlight).current_values.get_brightness();
+
+      // Optionally, convert to a percentage (0-100) and return it.
+      return d_brightness * 100.0;
+    on_value:
+      then:
+        - lvgl.slider.update:
+            id: display_brightness_slider
+            value: !lambda 'return x;' # x is the value from the lambda
+
+
+#  - platform: homeassistant
+#    id: backlight_brightness_sensor
+#    entity_id: light.moon_display_lcd_backlight
+#    attribute: brightness
+#    internal: true
+#    on_value:
+#      then:
+#        - lvgl.slider.update:
+#            id: display_brightness_slider
+#            value: !lambda 'return x / 2.55;' # x (0-255) is the value from the sensor. Needs to be scaled to 0-100.
+
 #---------------------------------------------------------------------------------------------------
 binary_sensor:
   - platform: gpio
@@ -112,10 +185,45 @@ binary_sensor:
         input: true # Ensure the pin mode is set correctly
         pullup: true # Use internal pullup resistor
     name: "Encoder Button"
+    on_double_click: 
+      then:
+        lvgl.page.next
+    on_click: 
+      min_length: 400ms
+      max_length: 10s
+      then:
+        - light.toggle: LED_Array
+        - light.toggle: backlight
 #---------------------------------------------------------------------------------------------------
 switch:
   - platform: restart
     name: "${friendly_name} Restart"
+#-------------------------------------------------------
+  - platform: template
+    name: Antiburn
+    id: switch_antiburn
+    icon: mdi:television-shimmer
+    optimistic: true
+    entity_category: "config"
+    turn_on_action:
+      - logger.log: "${friendly_name} Starting Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+            - delay: 1s
+      - lvgl.pause:
+          show_snow: true
+    turn_off_action:
+      - logger.log: "${friendly_name} Stopping Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+            - delay: 1s
+            - lvgl.pause:
 #---------------------------------------------------------------------------------------------------
 # Backlight control
 output:
@@ -157,6 +265,14 @@ script:
         id: LED_Array
         brightness: 80% # Set the brightness and colors/temperature as desired for the effect
         effect: "Rainbow" # Use the exact name of the defined effect
+
+  - id: init_brightness
+    then:
+      - lambda: |-
+          float m_brightness = id(LED_Array).current_values.get_brightness();
+          id(moon_brightness_sensor).publish_state(m_brightness * 100.0);
+          float d_brightness = id(backlight).current_values.get_brightness();
+          id(display_brightness_sensor).publish_state(d_brightness * 100.0);
 #---------------------------------------------------------------------------------------------------
 display:
   - platform: ili9xxx
@@ -193,7 +309,7 @@ display:
 #      swap_xy: False #Portrait
 #---------------------------------------------------------------------------------------------------
 lvgl:
-  log_level: DEBUG
+#  log_level: DEBUG
   displays:
     - moon_display
   encoders:
@@ -207,51 +323,150 @@ lvgl:
       bg_color: 0x000000
       align: CENTER
       text_align: CENTER
-      height: 167 #Landscape
-      width: 315 #Landscape
-#      height: 320 #Portrait
-#      width: 172 #Portrait
 #--------------------------------------
   pages:
-    - id: main_page
+    - id: time_page
       bg_color: 0x000000
       widgets:
-        - label:
-            id: display_time
-            text: "--:--"
-            styles: mystyle
-            height: 50%
+        - button:
+            bg_color: 0x000000
+            width: 80%
+            height: 45%
             align: top_mid
-            outline_width: ${Outlines}
-            outline_color: 0x00FF00
-        - label:
-            id: display_date
-            text: "----/--/--"
-            styles: mystyle
-            height: 50%
+            focused: 
+              bg_color: 0x111111
+            widgets:
+              - label:
+                  id: display_time
+                  text: "--:--"
+                  styles: mystyle
+                  outline_width: ${Outlines}
+                  outline_color: 0x00FF00
+        - button:
+            bg_color: 0x000000
+            width: 80%
+            height: 45%
             align: bottom_mid
-            outline_width: ${Outlines}
-            outline_color: 0x00FF00
+            focused: 
+              bg_color: 0x111111
+            widgets:
+              - label:
+                  id: display_date
+                  text: "----/--/--"
+                  styles: mystyle
+                  outline_width: ${Outlines}
+                  outline_color: 0x00FF00
 #--------------------------------------
     - id: brightness_page
       bg_color: 0x000000
+      layout:
+        type: grid
+        grid_columns: [FR(75),FR(25)]
+        grid_rows: [FR(1),FR(1),FR(1),FR(1)]
       widgets:
         - label:
-            id: label_brightness
-            text: "Brightness"
-            styles: mystyle
+            grid_cell_column_pos: 0
+            grid_cell_row_pos: 0
+            grid_cell_column_span: 2
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            text_align: CENTER
+            text: "Moon Brightness"
+            text_font: montserrat_20
+            text_color: 0xFFFFFF
             outline_width: ${Outlines}
             outline_color: 0x00FF00
-#--------------------------------------
-    - id: color_page
-      bg_color: 0x000000
-      widgets:
+        - slider:
+            id: moon_brightness_slider
+            grid_cell_column_pos: 0
+            grid_cell_row_pos: 1
+            outline_width: ${Outlines}
+            outline_color: 0x00FF00
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: CENTER
+            text_align: CENTER
+            bg_color: 0x555555
+            min_value: 0
+            max_value: 100
+            focused:
+              bg_color: 0x00FF00
+            knob:
+              focused:
+                bg_color: 0x00FF00
+            on_value:
+              - light.turn_on:
+                  id: LED_Array
+                  brightness: !lambda |-
+                    return x / 100.0; // Output value must be 0.0 to 1.0
+              - lvgl.label.update:
+                  id: moon_brightness_label
+                  text:
+                    format: "%.0f%%"
+                    args: [ x ]
         - label:
-            id: label_color
-            text: "Color"
-            styles: mystyle
+            id: moon_brightness_label
+            grid_cell_column_pos: 1
+            grid_cell_row_pos: 1
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            text_align: CENTER
             outline_width: ${Outlines}
             outline_color: 0x00FF00
+            text: "XX%%"
+            text_font: montserrat_20
+            text_color: 0xFFFFFF
+
+        - label:
+            grid_cell_column_pos: 0
+            grid_cell_row_pos: 2
+            grid_cell_column_span: 2
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            text_align: CENTER
+            outline_width: ${Outlines}
+            outline_color: 0x00FF00
+            text: "Display Brightness"
+            text_font: montserrat_20
+            text_color: 0xFFFFFF
+        - slider:
+            id: display_brightness_slider
+            grid_cell_column_pos: 0
+            grid_cell_row_pos: 3
+            outline_width: ${Outlines}
+            outline_color: 0x00FF00
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: CENTER
+            text_align: CENTER
+            bg_color: 0x555555
+            min_value: 0
+            max_value: 100
+            focused:
+              bg_color: 0x00FF00
+            knob:
+              focused:
+                bg_color: 0x00FF00
+            on_value:
+              - light.turn_on:
+                  id: backlight
+                  brightness: !lambda |-
+                    return x / 100.0; // Output value must be 0.0 to 1.0
+              - lvgl.label.update:
+                  id: display_brightness_label
+                  text:
+                    format: "%.0f%%"
+                    args: [ x ]
+        - label:
+            id: display_brightness_label
+            grid_cell_column_pos: 1
+            grid_cell_row_pos: 3
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: STRETCH
+            text_align: CENTER
+            outline_width: ${Outlines}
+            outline_color: 0x00FF00
+            text: "XX%%"
+            text_font: montserrat_20
+            text_color: 0xFFFFFF
 #---------------------------------------------------------------------------------------------------
 font:
   - file: "gfonts://Concert One"
