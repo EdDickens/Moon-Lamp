@@ -15,11 +15,16 @@ esphome:
   on_boot: 
     priority: -100
     then:
+      - lvgl.resume:
+      - lvgl.widget.redraw:
+      - script.execute: rainbow_on
+      - script.execute: init_brightness
       - light.turn_on: 
           id: backlight
           brightness: 75%
-      - script.execute: rainbow_on
-      - script.execute: init_brightness
+      - lvgl.slider.update:
+          id: screen_timeout_slider
+          value: !lambda 'return id(display_timeout_s).state;'
 #---------------------------------------------------------------------------------------------------
 esp32:
   variant: esp32c6
@@ -74,6 +79,20 @@ spi:
     mosi_pin:
       number: GPIO6
 #---------------------------------------------------------------------------------------------------
+number:
+  - platform: template
+    name: "Screen Timeout"
+    id: display_timeout_s
+    unit_of_measurement: "s"
+    min_value: 10
+    max_value: 180
+    step: 1
+    initial_value: 30
+    mode: box
+    entity_category: config
+    optimistic: true
+    restore_value: True
+#---------------------------------------------------------------------------------------------------
 text_sensor:
   - platform: wifi_info
     ip_address:
@@ -113,7 +132,31 @@ sensor:
     pin_b: GPIO1 # Replace with your DT/B pin
     resolution: 1 # Number of steps per click
     # If the values go in the wrong direction, swap pin_a and pin_b
-
+    on_value: 
+      - if:
+          condition:
+            lvgl.is_paused
+          then:
+            - logger.log: "LVGL resuming."
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+          else:
+            - logger.log: "LVGL is Running. Taking no acton."
+      - if:
+          condition:
+            light.is_off: backlight
+          then:
+            - light.turn_on: backlight
+          else:
+            - logger.log: "Backlight is On. Taking no acton."
+      - if:
+          condition:
+            light.is_off: LED_Array
+          then:
+            - light.turn_on: LED_Array
+          else:
+            - logger.log: "Moon is On. Taking no acton."
+#--------------------------------------
   - platform: template
     name: "Moon Brightness"
     id: moon_brightness_sensor
@@ -131,19 +174,7 @@ sensor:
         - lvgl.slider.update:
             id: moon_brightness_slider
             value: !lambda 'return x;' # x is the value from the lambda
-
-
-#  - platform: homeassistant
-#    id: moon_brightness_sensor
-#    entity_id: light.moon_display_moon_display_led_array
-#    attribute: brightness
-#    internal: true
-#    on_value:
-#      then:
-#        - lvgl.slider.update:
-#            id: moon_brightness_slider
-#            value: !lambda 'return x / 2.55;' # x (0-255) is the value from the sensor. Needs to be scaled to 0-100.
-
+#--------------------------------------
   - platform: template
     name: "Display Brightness"
     id: display_brightness_sensor
@@ -161,19 +192,6 @@ sensor:
         - lvgl.slider.update:
             id: display_brightness_slider
             value: !lambda 'return x;' # x is the value from the lambda
-
-
-#  - platform: homeassistant
-#    id: backlight_brightness_sensor
-#    entity_id: light.moon_display_lcd_backlight
-#    attribute: brightness
-#    internal: true
-#    on_value:
-#      then:
-#        - lvgl.slider.update:
-#            id: display_brightness_slider
-#            value: !lambda 'return x / 2.55;' # x (0-255) is the value from the sensor. Needs to be scaled to 0-100.
-
 #---------------------------------------------------------------------------------------------------
 binary_sensor:
   - platform: gpio
@@ -186,14 +204,43 @@ binary_sensor:
         pullup: true # Use internal pullup resistor
     name: "Encoder Button"
     on_double_click: 
-      then:
-        lvgl.page.next
+      - if:
+          condition:
+            light.is_off: backlight
+          then:
+            light.turn_on: backlight
+          else:
+            lvgl.page.next
     on_click: 
       min_length: 400ms
       max_length: 10s
       then:
         - light.toggle: LED_Array
         - light.toggle: backlight
+    on_release:
+      - if:
+          condition:
+            lvgl.is_paused
+          then:
+            - logger.log: "LVGL resuming."
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+          else:
+            - logger.log: "LVGL is Running. Taking no acton."
+      - if:
+          condition:
+            light.is_off: backlight
+          then:
+            - light.turn_on: backlight
+          else:
+            - logger.log: "Backlight is On. Taking no acton."
+      - if:
+          condition:
+            light.is_off: LED_Array
+          then:
+            - light.turn_on: LED_Array
+          else:
+            - logger.log: "Moon is On. Taking no acton."
 #---------------------------------------------------------------------------------------------------
 switch:
   - platform: restart
@@ -309,12 +356,20 @@ display:
 #      swap_xy: False #Portrait
 #---------------------------------------------------------------------------------------------------
 lvgl:
-#  log_level: DEBUG
+  log_level: DEBUG
+  buffer_size: 12%
   displays:
     - moon_display
   encoders:
     enter_button: encoder_button
     sensor: encoder_steps
+  on_idle:
+    timeout: !lambda |-
+      return id(display_timeout_s).state * 1000;
+    then:
+      - logger.log: "LVGL is idle"
+      - light.turn_off: backlight
+      - lvgl.pause:
 #--------------------------------------
   style_definitions:
     - id: mystyle
@@ -328,34 +383,24 @@ lvgl:
     - id: time_page
       bg_color: 0x000000
       widgets:
-        - button:
-            bg_color: 0x000000
+        - label:
+            id: display_time
+            text: "--:--"
+            styles: mystyle
             width: 80%
             height: 45%
             align: top_mid
-            focused: 
-              bg_color: 0x111111
-            widgets:
-              - label:
-                  id: display_time
-                  text: "--:--"
-                  styles: mystyle
-                  outline_width: ${Outlines}
-                  outline_color: 0x00FF00
-        - button:
-            bg_color: 0x000000
+            outline_width: ${Outlines}
+            outline_color: 0x00FF00
+        - label:
+            id: display_date
+            text: "----/--/--"
+            styles: mystyle
             width: 80%
             height: 45%
             align: bottom_mid
-            focused: 
-              bg_color: 0x111111
-            widgets:
-              - label:
-                  id: display_date
-                  text: "----/--/--"
-                  styles: mystyle
-                  outline_width: ${Outlines}
-                  outline_color: 0x00FF00
+            outline_width: ${Outlines}
+            outline_color: 0x00FF00
 #--------------------------------------
     - id: brightness_page
       bg_color: 0x000000
@@ -369,11 +414,11 @@ lvgl:
             grid_cell_row_pos: 0
             grid_cell_column_span: 2
             grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
+            grid_cell_y_align: CENTER
             text_align: CENTER
             text: "Moon Brightness"
-            text_font: montserrat_20
-            text_color: 0xFFFFFF
+            text_font: concert_20
+            text_color: 0x2F8CD8
             outline_width: ${Outlines}
             outline_color: 0x00FF00
         - slider:
@@ -408,26 +453,26 @@ lvgl:
             grid_cell_column_pos: 1
             grid_cell_row_pos: 1
             grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
+            grid_cell_y_align: CENTER
             text_align: CENTER
             outline_width: ${Outlines}
             outline_color: 0x00FF00
             text: "XX%%"
-            text_font: montserrat_20
-            text_color: 0xFFFFFF
+            text_font: concert_20
+            text_color: 0x2F8CD8
 
         - label:
             grid_cell_column_pos: 0
             grid_cell_row_pos: 2
             grid_cell_column_span: 2
             grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
+            grid_cell_y_align: CENTER
             text_align: CENTER
             outline_width: ${Outlines}
             outline_color: 0x00FF00
             text: "Display Brightness"
-            text_font: montserrat_20
-            text_color: 0xFFFFFF
+            text_font: concert_20
+            text_color: 0x2F8CD8
         - slider:
             id: display_brightness_slider
             grid_cell_column_pos: 0
@@ -460,13 +505,78 @@ lvgl:
             grid_cell_column_pos: 1
             grid_cell_row_pos: 3
             grid_cell_x_align: STRETCH
-            grid_cell_y_align: STRETCH
+            grid_cell_y_align: CENTER
             text_align: CENTER
             outline_width: ${Outlines}
             outline_color: 0x00FF00
             text: "XX%%"
-            text_font: montserrat_20
-            text_color: 0xFFFFFF
+            text_font: concert_20
+            text_color: 0x2F8CD8
+#--------------------------------------
+    - id: timeout_page
+      bg_color: 0x000000
+      layout:
+        type: grid
+        grid_columns: [FR(85),FR(15)]
+        grid_rows: [FR(1),FR(1)]
+        pad_row: 6
+        pad_column: 6
+      widgets:
+        - label:
+            grid_cell_column_pos: 0
+            grid_cell_row_pos: 0
+            grid_cell_column_span: 2
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: CENTER
+            text_align: CENTER
+            align: bottom_mid
+            text: "Screen Timeout"
+            text_font: concert_24
+            text_color: 0x2F8CD8
+            outline_width: ${Outlines}
+            outline_color: 0x00FF00
+        - slider:
+            id: screen_timeout_slider
+            grid_cell_column_pos: 0
+            grid_cell_row_pos: 1
+            outline_width: ${Outlines}
+            outline_color: 0x00FF00
+            grid_cell_x_align: CENTER
+            grid_cell_y_align: CENTER
+            text_align: CENTER
+            align: top_mid
+            bg_color: 0x555555
+            min_value: 10
+            max_value: 180
+            width: 75%
+            focused:
+              bg_color: 0x00FF00
+            knob:
+              focused:
+                bg_color: 0x00FF00
+            value: !lambda 'return id(display_timeout_s).state;'
+            on_value:
+              - lvgl.label.update:
+                  id: screen_timeout_label
+                  text:
+                    format: "%.0f S"
+                    args: [ x ]
+              - number.set:
+                  id: display_timeout_s
+                  value: !lambda 'return x;'
+        - label:
+            id: screen_timeout_label
+            grid_cell_column_pos: 1
+            grid_cell_row_pos: 1
+            grid_cell_x_align: STRETCH
+            grid_cell_y_align: CENTER
+            text_align: CENTER
+            align: top_mid
+            outline_width: ${Outlines}
+            outline_color: 0x00FF00
+            text: "XX S"
+            text_font: concert_20
+            text_color: 0x2F8CD8
 #---------------------------------------------------------------------------------------------------
 font:
   - file: "gfonts://Concert One"
@@ -474,5 +584,13 @@ font:
     size: 48
     bpp: 4
 #-------------------------------------------------------
-
+  - file: "gfonts://Concert One"
+    id: concert_24
+    size: 24
+    bpp: 4
+#-------------------------------------------------------
+  - file: "gfonts://Concert One"
+    id: concert_20
+    size: 20
+    bpp: 4
 #---------------------------------------------------------------------------------------------------
