@@ -84,6 +84,7 @@ web_server:
     password: !secret web_password
 #---------------------------------------------------------------------------------------------------
 wifi:
+  min_auth_mode: wpa2
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   fast_connect: on
